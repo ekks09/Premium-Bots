@@ -1,0 +1,8 @@
+python-telegram-bot==20.7
+requests==2.31.0
+python-dotenv==1.0.0
+httpx==0.25.2
+mpesa-api
+python-dotenv
+gunicorn
+Flask==2.3.3
