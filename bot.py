@@ -26,6 +26,9 @@ product_service = ProductService()
 # Temporary user states
 USER_STATES = {}
 
+# Store pending payments
+PENDING_PAYMENTS = {}
+
 
 # -------------------------------
 # COMMAND: /start
@@ -136,14 +139,23 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # ResponseCode 0 = STK push sent successfully
         if response.get("ResponseCode") == "0":
-            context.user_data["pending_payment"] = {
-                "checkout_id": response["CheckoutRequestID"],
+            checkout_id = response["CheckoutRequestID"]
+
+            # Store payment info
+            PENDING_PAYMENTS[checkout_id] = {
+                "user_id": update.effective_user.id,
                 "product_id": product_id,
                 "phone": phone,
             }
 
+            context.user_data["pending_payment"] = {
+                "checkout_id": checkout_id,
+                "product_id": product_id,
+            }
+
             await update.message.reply_text(
-                "✔ Check your phone and enter your M-Pesa PIN to complete payment."
+                "✅ Check your phone and enter your M-Pesa PIN to complete payment.\n"
+                "I'll send your download link automatically once payment is confirmed."
             )
         else:
             await update.message.reply_text(
@@ -182,8 +194,13 @@ Steps to buy:
 # -------------------------------
 # Application entry
 # -------------------------------
-def create_application(token: str):
-    app = Application.builder().token(token).build()
+def create_application():
+    """Create the Telegram application without requiring any arguments."""
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not TELEGRAM_TOKEN:
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
+    
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Commands
     app.add_handler(CommandHandler("start", start))
