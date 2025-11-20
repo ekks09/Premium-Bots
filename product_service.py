@@ -1,4 +1,4 @@
-import os
+# product_service.py
 from typing import Dict, List
 
 class ProductService:
@@ -28,23 +28,7 @@ class ProductService:
         }
 
     def get_products(self) -> List[Dict]:
-        """Return all products."""
         return list(self.products.values())
 
     def get_product(self, product_id: str) -> Dict:
-        """Return a single product by ID."""
         return self.products.get(str(product_id))
-
-    def generate_download_link(self, product_id: str) -> str | None:
-        """Return PixelDrain download link, or None for missing product."""
-        product = self.get_product(product_id)
-        if not product:
-            return None
-        return product["pixeldrain_link"]
-
-    def add_product(self, product_data: Dict):
-        """Add a new product. Assigns the next available ID."""
-        new_id = str(len(self.products) + 1)
-        product_data["id"] = new_id
-        self.products[new_id] = product_data
-        return new_id
