@@ -4,8 +4,9 @@ import logging
 import requests
 import json
 import re
-from mpesa_handler import MpesaHandler
+import time
 from product_service import ProductService
+from mpesa_handler import MpesaHandler  # now acts as Paystack handler (keeps filename same)
 from typing import Dict
 
 logging.basicConfig(level=logging.INFO)
@@ -18,13 +19,14 @@ if not BOT_TOKEN:
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 HEADERS = {"Content-Type": "application/json"}
 
-mpesa_handler = MpesaHandler()
+# keep names for compatibility with server.py imports
+paystack_handler = MpesaHandler()
 product_service = ProductService()
 
 # in-memory states (simple)
 USER_STATES: Dict[int, str] = {}
 USER_DATA: Dict[int, Dict] = {}
-PENDING_PAYMENTS: Dict[str, Dict] = {}   # CheckoutRequestID -> { user_id, product_id, phone }
+PENDING_PAYMENTS: Dict[str, Dict] = {}   # reference -> { user_id, product_id, amount }
 
 def send_request(method: str, payload: dict):
     url = f"{TELEGRAM_API}/{method}"
@@ -55,7 +57,8 @@ def handle_start(chat_id: int, first_name: str = ""):
     text = (
         f"🤖 Welcome {first_name or ''}!\n\n"
         "I handle:\n"
-        "• Product browsing\n• M-Pesa payments\n• Instant downloads\n\n"
+        "• Product browsing\n• Paystack payments\n"
+        "• Instant downloads\n\n"
         "Use /products to get started."
     )
     send_message(chat_id, text)
@@ -74,6 +77,8 @@ def handle_callback(callback_query: dict):
     user_id = from_user.get("id")
     if not user_id:
         return
+
+    # When user taps a product button
     if data.startswith("product_"):
         product_id = data.split("_", 1)[1]
         product = product_service.get_product(product_id)
@@ -85,26 +90,93 @@ def handle_callback(callback_query: dict):
             })
             answer_callback_query(callback_id, "Product not found.")
             return
-        # ask for phone number
-        USER_STATES[user_id] = "awaiting_phone"
-        USER_DATA.setdefault(user_id, {})["selected_product_id"] = product_id
-        text = (
-            f"🛒 *{product['name']}*\n"
-            f"💵 Price: KSh {product['price']}\n"
-            f"📦 {product['description']}\n\n"
-            "Enter your M-Pesa number in the format:\n`2547XXXXXXXX`"
-        )
-        # edit message to show details
+
+        # Create a unique reference
+        reference = f"tg{user_id}-{product_id}-{int(time.time())}"
+
+        # Use a placeholder email because Paystack needs an email. In production collect real user email.
+        email = (from_user.get("username") or f"user{user_id}") + "@example.com"
+
+        try:
+            init = paystack_handler.initialize_transaction(email=email, amount_major=product["price"], reference=reference)
+        except Exception as e:
+            logger.exception("Paystack init failed: %s", e)
+            answer_callback_query(callback_id, "Failed to create payment. Try again later.")
+            return
+
+        if not init.get("status"):
+            # API returned non-success
+            logger.warning("Paystack initialize returned non-success: %s", init)
+            answer_callback_query(callback_id, "Payment initialization failed.")
+            return
+
+        data = init.get("data", {})
+        auth_url = data.get("authorization_url")
+        ref = data.get("reference", reference)
+
+        # store in pending payments by reference
+        PENDING_PAYMENTS[ref] = {"user_id": user_id, "product_id": product_id, "amount": product["price"]}
+
+        # Edit message to show payment link + verify button
+        keyboard = [
+            [{"text": "Open payment page", "url": auth_url}],
+            [{"text": "I paid — verify", "callback_data": f"verify|{ref}"}]
+        ]
         send_request("editMessageText", {
             "chat_id": callback_query["message"]["chat"]["id"],
             "message_id": callback_query["message"]["message_id"],
-            "text": text,
-            "parse_mode": "Markdown"
+            "text": (
+                f"🛒 *{product['name']}*\n"
+                f"💵 Price: KSh {product['price']}\n\n"
+                "Tap the button to open Paystack and complete payment."
+            ),
+            "parse_mode": "Markdown",
+            "reply_markup": {"inline_keyboard": keyboard}
         })
-        answer_callback_query(callback_id, "Enter your phone number to continue.")
+        answer_callback_query(callback_id, "Payment link created. Open it to pay.")
+        return
 
-def is_valid_mpesa_number(s: str) -> bool:
-    return bool(re.fullmatch(r"2547\d{8}", s))
+    # manual verification button
+    if data.startswith("verify|"):
+        _, ref = data.split("|", 1)
+        callback_chat = callback_query["message"]["chat"]["id"]
+        send_request("editMessageText", {
+            "chat_id": callback_chat,
+            "message_id": callback_query["message"]["message_id"],
+            "text": "Verifying payment... (this may take a few seconds)"
+        })
+        try:
+            result = paystack_handler.verify_transaction(reference=ref)
+        except Exception as e:
+            logger.exception("Verify API failed: %s", e)
+            send_message(callback_chat, "Verification failed: API error.")
+            return
+
+        if not result.get("status"):
+            send_message(callback_chat, f"Verification API returned failure: {result}")
+            return
+
+        status = result.get("data", {}).get("status")
+        if status == "success":
+            # deliver product
+            pending = PENDING_PAYMENTS.get(ref)
+            if pending:
+                user = pending["user_id"]
+                product_id = pending["product_id"]
+                product = product_service.get_product(product_id)
+                if product:
+                    download_link = product.get("pixeldrain_link", "No link available")
+                    message = (
+                        "✅ Payment confirmed!\n\n"
+                        f"📦 Product: {product['name']}\n"
+                        f"🔗 Download Link: {download_link}\n\n"
+                        "Thank you for your purchase!"
+                    )
+                    send_message(user, message)
+                del PENDING_PAYMENTS[ref]
+            send_message(callback_chat, "Payment verified and product delivered.")
+        else:
+            send_message(callback_chat, f"Payment not successful. Status: {status}")
 
 def handle_text_message(message: dict):
     chat = message.get("chat", {})
@@ -127,55 +199,11 @@ def handle_text_message(message: dict):
             "/start - Restart bot\n"
             "/products - Show product list\n"
             "/help - Show help\n\n"
-            "Steps to buy:\n1. Choose a product\n2. Send phone number\n3. Approve STK push\n4. Receive download link"
+            "Steps to buy:\n1. Choose a product\n2. Click the payment link and pay on Paystack\n3. You'll get the download link automatically when payment succeeds."
         ))
         return
 
-    # If user in awaiting_phone state
-    if USER_STATES.get(user_id) == "awaiting_phone":
-        phone = text
-        if not is_valid_mpesa_number(phone):
-            send_message(chat_id, "❌ Invalid number. Use format: `2547XXXXXXXX`", reply_markup=None)
-            return
-        selected_product_id = USER_DATA.get(user_id, {}).get("selected_product_id")
-        if not selected_product_id:
-            send_message(chat_id, "❌ Product missing. Start again with /products.")
-            USER_STATES[user_id] = None
-            return
-        product = product_service.get_product(selected_product_id)
-        if not product:
-            send_message(chat_id, "❌ Product not found. Start again with /products.")
-            USER_STATES[user_id] = None
-            return
-
-        send_message(chat_id, "📲 Sending M-Pesa STK push...")
-
-        try:
-            resp = mpesa_handler.make_stk_push(
-                phone_number=phone,
-                amount=product["price"],
-                account_reference=f"PD{selected_product_id}"
-            )
-            # success response has ResponseCode == "0"
-            if resp.get("ResponseCode") in ("0", 0, "00"):
-                checkout_id = resp.get("CheckoutRequestID")
-                PENDING_PAYMENTS[checkout_id] = {"user_id": user_id, "product_id": selected_product_id, "phone": phone}
-                USER_DATA[user_id]["pending_payment"] = {"checkout_id": checkout_id, "product_id": selected_product_id}
-                send_message(chat_id, (
-                    "✅ Check your phone and enter your M-Pesa PIN to complete payment.\n"
-                    "I'll send your download link automatically once payment is confirmed."
-                ))
-            else:
-                logger.warning("STK request not accepted: %s", resp)
-                send_message(chat_id, "❌ Payment request failed. Try again later.")
-        except Exception as e:
-            logger.exception("STK push failed: %s", e)
-            send_message(chat_id, "❌ Payment system unavailable. Try again later.")
-        finally:
-            USER_STATES[user_id] = None
-        return
-
-    # otherwise ignore / allow generic reply
+    # otherwise
     send_message(chat_id, "I didn't understand that. Use /products to browse items or /help for commands.")
 
 def handle_update(update_json: dict):
@@ -189,7 +217,6 @@ def handle_update(update_json: dict):
     if "message" in update_json:
         handle_text_message(update_json["message"])
         return
-    # edited_message, channel_post etc can be ignored for now
     logger.debug("Update type not handled: keys=%s", list(update_json.keys()))
 
 # helper to let server set webhook
