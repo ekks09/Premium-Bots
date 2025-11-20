@@ -2,16 +2,18 @@
 import os
 import requests
 import logging
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
-# Map product IDs to download links
-PRODUCT_LINKS = {
-    "product_1": "https://pixeldrain.com/u/aakwH36V",
-    "product_2": "https://pixeldrain.com/u/anotherLinkHere",
-    # Add more products here
+# ===== PRODUCTS HERE =======
+PRODUCTS = {
+    "product_1": {
+        "name": "Premium Bundle",
+        "price": 100,   # Example price
+        "pixeldrain_link": "https://pixeldrain.com/u/aakwH36V"
+    },
 }
+# ===========================
 
 class PaystackHandler:
     def __init__(self):
@@ -24,59 +26,48 @@ class PaystackHandler:
             "Content-Type": "application/json"
         }
 
-    def initialize_payment(self, email: str, amount: int, reference: str, callback_url: str, product_id: str) -> Dict:
-        """
-        Initialize a Paystack payment for a specific product
-        """
+    def initialize_payment(self, email: str, product_id: str, reference: str, callback_url: str):
+        product = PRODUCTS.get(product_id)
+        if not product:
+            logger.error("Product not found: %s", product_id)
+            return {}
+
         payload = {
             "email": email,
-            "amount": amount * 100,
+            "amount": product["price"] * 100,
             "reference": reference,
             "callback_url": callback_url,
-            "metadata": {
-                "product_id": product_id
-            }
+            "metadata": {"product_id": product_id}
         }
+
         try:
             resp = requests.post(f"{self.base_url}/transaction/initialize", json=payload, headers=self.headers, timeout=15)
             resp.raise_for_status()
             data = resp.json()
             if data.get("status"):
-                logger.info("Payment initialized: %s", data)
                 return data["data"]
-            else:
-                logger.warning("Failed to initialize payment: %s", data)
-                return {}
+            return {}
         except Exception as e:
-            logger.exception("Error initializing Paystack payment: %s", e)
+            logger.exception("Paystack init error: %s", e)
             return {}
 
-    def verify_payment(self, reference: str) -> Dict:
-        """
-        Verify transaction status and return the appropriate download link
-        """
+    def verify_payment(self, reference: str):
         try:
             resp = requests.get(f"{self.base_url}/transaction/verify/{reference}", headers=self.headers, timeout=15)
             resp.raise_for_status()
             data = resp.json()
-            if data.get("status") and data["data"]["status"] == "success":
-                logger.info("Payment verified successfully: %s", data)
-                product_id = data["data"]["metadata"].get("product_id")
-                download_link = PRODUCT_LINKS.get(product_id)
-                return {
-                    "status": "success",
-                    "message": "Payment confirmed! Here’s your download link.",
-                    "download_link": download_link
-                }
-            else:
-                logger.warning("Payment not successful or failed verification: %s", data)
-                return {
-                    "status": "failed",
-                    "message": "Payment verification failed or not completed."
-                }
-        except Exception as e:
-            logger.exception("Error verifying Paystack payment: %s", e)
+
+            if not data.get("status") or data["data"]["status"] != "success":
+                return {"status": "failed"}
+
+            product_id = data["data"]["metadata"].get("product_id")
+            product = PRODUCTS.get(product_id)
+
             return {
-                "status": "error",
-                "message": str(e)
+                "status": "success",
+                "product_name": product["name"],
+                "download_link": product["pixeldrain_link"]
             }
+        except Exception as e:
+            logger.exception("Paystack verify error: %s", e)
+            return {"status": "error", "message": str(e)}
