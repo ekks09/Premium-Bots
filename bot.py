@@ -46,7 +46,6 @@ I handle:
 
 Use /products to get started.
 """
-
     await update.message.reply_text(message)
 
 
@@ -61,12 +60,7 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [
-            InlineKeyboardButton(
-                f"{p['name']} - KSh {p['price']}",
-                callback_data=f"product_{p['id']}"
-            )
-        ]
+        [InlineKeyboardButton(f"{p['name']} - KSh {p['price']}", callback_data=f"product_{p['id']}")]
         for p in products
     ]
 
@@ -101,7 +95,6 @@ async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT
 Enter your M-Pesa number in the format:
 2547XXXXXXXX
 """
-
     await query.edit_message_text(text)
 
 
@@ -112,11 +105,10 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
 
     if USER_STATES.get(user_id) != "awaiting_phone":
-        return  # Ignore random messages
+        return  # Ignore messages when not expecting a phone number
 
     phone = update.message.text.strip()
 
-    # Basic validation
     if not phone.isdigit() or not phone.startswith("254") or len(phone) != 12:
         await update.message.reply_text("❌ Invalid number. Use format: 2547XXXXXXXX")
         return
@@ -137,37 +129,29 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
             account_reference=f"PD{product_id}"
         )
 
-        # ResponseCode 0 = STK push sent successfully
         if response.get("ResponseCode") == "0":
             checkout_id = response["CheckoutRequestID"]
 
-            # Store payment info
             PENDING_PAYMENTS[checkout_id] = {
-                "user_id": update.effective_user.id,
+                "user_id": user_id,
                 "product_id": product_id,
                 "phone": phone,
             }
 
-            context.user_data["pending_payment"] = {
-                "checkout_id": checkout_id,
-                "product_id": product_id,
-            }
+            context.user_data["pending_payment"] = {"checkout_id": checkout_id, "product_id": product_id}
 
             await update.message.reply_text(
                 "✅ Check your phone and enter your M-Pesa PIN to complete payment.\n"
                 "I'll send your download link automatically once payment is confirmed."
             )
         else:
-            await update.message.reply_text(
-                "❌ Payment request failed. Try again later."
-            )
+            await update.message.reply_text("❌ Payment request failed. Try again later.")
 
     except Exception as e:
         logger.error(f"STK Error: {e}")
         await update.message.reply_text("❌ Payment system unavailable.")
-
     finally:
-        USER_STATES[user_id] = None  # Reset state
+        USER_STATES[user_id] = None
 
 
 # -------------------------------
@@ -192,25 +176,20 @@ Steps to buy:
 
 
 # -------------------------------
-# Application entry
+# APPLICATION BUILDER
 # -------------------------------
-def create_application():
-    """Create the Telegram application without requiring any arguments."""
+def create_application() -> Application:
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
-    
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Commands
+    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("products", show_products))
     app.add_handler(CommandHandler("help", help_command))
-
-    # Callback
     app.add_handler(CallbackQueryHandler(handle_product_selection))
-
-    # Phone numbers and messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone_number))
 
     return app
