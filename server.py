@@ -66,12 +66,13 @@ def paystack_callback():
         return jsonify({"status": "error"}), 500
 
 def set_telegram_webhook():
-    if not WEBHOOK_URL:
-        return
-    url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     try:
-        set_webhook(url)
+        from bot import TELEGRAM_TOKEN
+        webhook_url = f"{request.url_root}telegram-webhook"
+        tele_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}"
+        requests.get(tele_url)
+        logger.info(f"Webhook set to {webhook_url}")
     except Exception as e:
-        logger.exception("Failed to set webhook: %s", e)
+        logger.error(f"Failed to set Telegram webhook: {e}")
 
-set_telegram_webhook()
+
