@@ -6,6 +6,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn server:app
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
       - key: TELEGRAM_BOT_TOKEN
         value: 8569971585:AAEBW_I71bEAzapt72vEWaNe_FU9h4lpxQ0
       - key: MPESA_CONSUMER_KEY
