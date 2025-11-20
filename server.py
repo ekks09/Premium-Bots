@@ -2,14 +2,17 @@
 import os
 import logging
 from flask import Flask, request, jsonify
-from bot import handle_update, send_message, PENDING_PAYMENTS
+from bot import handle_update, send_message, PENDING_PAYMENTS, product_service
 from product_service import ProductService
+from mpesa_handler import MpesaHandler  # this is our Paystack handler
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 product_service = ProductService()
+paystack = MpesaHandler()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-render-app.onrender.com
@@ -18,7 +21,6 @@ if not TELEGRAM_BOT_TOKEN:
     logger.error("Missing TELEGRAM_BOT_TOKEN environment variable")
     raise SystemExit("Missing TELEGRAM_BOT_TOKEN")
 
-# Health and index
 @app.route("/", methods=["GET"])
 def index():
     return "Bot is running."
@@ -33,62 +35,67 @@ def webhook():
     try:
         update_json = request.get_json(force=True)
         logger.info("Received update: %s", update_json)
-        # delegate to bot handler (synchronous)
         handle_update(update_json)
         return "OK", 200
     except Exception as e:
         logger.exception("Webhook handling failed: %s", e)
         return "Error", 500
 
-# M-Pesa STK callback route (Daraja will POST here)
-@app.route("/mpesa-callback", methods=["POST"])
-def mpesa_callback():
+# Paystack webhook receiver
+@app.route("/paystack-webhook", methods=["POST"])
+def paystack_webhook():
     try:
-        data = request.get_json(force=True)
-        logger.info("M-Pesa callback received: %s", data)
+        # raw_body needed to verify signature
+        raw_body = request.get_data()
+        signature = request.headers.get("x-paystack-signature", "")
+        if not paystack.verify_webhook_signature(raw_body, signature):
+            logger.warning("Invalid Paystack webhook signature.")
+            return jsonify({"status": "error", "message": "invalid signature"}), 400
 
-        # Common structure for Daraja STK push callback:
-        callback_data = data.get("Body", {}).get("stkCallback", {}) or {}
-        result_code = callback_data.get("ResultCode")
-        checkout_request_id = callback_data.get("CheckoutRequestID")
-        callback_metadata = callback_data.get("CallbackMetadata", {})
+        payload = request.get_json(force=True)
+        logger.info("Paystack webhook payload: %s", payload)
 
-        if result_code == 0 or str(result_code) == "0":
-            # successful payment
-            logger.info("Payment success for checkout: %s", checkout_request_id)
-            payment_info = PENDING_PAYMENTS.get(checkout_request_id)
-            if payment_info:
-                user_id = payment_info["user_id"]
-                product_id = payment_info["product_id"]
-                # Get product link from ProductService
-                product = product_service.get_product(product_id)
-                if product:
-                    download_link = product.get("pixeldrain_link", "No link available")
-                    message = (
-                        "✅ Payment confirmed!\n\n"
-                        f"📦 Product: {product['name']}\n"
-                        f"🔗 Download Link: {download_link}\n\n"
-                        "Thank you for your purchase!"
-                    )
-                    try:
-                        send_message(chat_id=user_id, text=message)
-                        logger.info("Download link sent to user %s", user_id)
-                    except Exception as e:
-                        logger.exception("Failed to send Telegram message: %s", e)
-                # remove pending payment
-                del PENDING_PAYMENTS[checkout_request_id]
+        event = payload.get("event")
+        data = payload.get("data", {})
+
+        # handle charge.success (completed payment)
+        if event == "charge.success":
+            reference = data.get("reference")
+            status = data.get("status")
+            logger.info("charge.success received for %s status=%s", reference, status)
+
+            if status == "success":
+                pending = PENDING_PAYMENTS.get(reference)
+                if pending:
+                    user_id = pending["user_id"]
+                    product_id = pending["product_id"]
+                    product = product_service.get_product(product_id)
+                    if product:
+                        download_link = product.get("pixeldrain_link", "No link available")
+                        message = (
+                            "✅ Payment confirmed!\n\n"
+                            f"📦 Product: {product['name']}\n"
+                            f"🔗 Download Link: {download_link}\n\n"
+                            "Thank you for your purchase!"
+                        )
+                        try:
+                            send_message(chat_id=user_id, text=message)
+                            logger.info("Download link sent to user %s", user_id)
+                        except Exception as e:
+                            logger.exception("Failed to send Telegram message: %s", e)
+                    # remove pending payment
+                    del PENDING_PAYMENTS[reference]
+                else:
+                    logger.warning("No pending payment match for reference: %s", reference)
             else:
-                logger.warning("No pending payment match for checkout: %s", checkout_request_id)
-        else:
-            logger.warning("Payment failed or canceled for checkout %s: %s", checkout_request_id, callback_data.get("ResultDesc"))
+                logger.warning("charge.success but status != success for %s: %s", reference, status)
 
-        # Daraja expects a 200 JSON response
-        return jsonify({"ResultCode": 0, "ResultDesc": "Success"})
+        # respond 200 quickly
+        return jsonify({"status": "ok"}), 200
 
     except Exception as e:
-        logger.exception("Error processing M-Pesa callback: %s", e)
-        return jsonify({"ResultCode": 1, "ResultDesc": "Failed"}), 500
-
+        logger.exception("Error processing Paystack webhook: %s", e)
+        return jsonify({"status": "error", "message": "failed"}), 500
 
 def set_telegram_webhook():
     """Set Telegram webhook to WEBHOOK_URL + /webhook (called at startup)."""
@@ -103,7 +110,6 @@ def set_telegram_webhook():
         logger.info("Set Telegram webhook to %s", url)
     except Exception as e:
         logger.exception("Failed to set webhook: %s", e)
-
 
 # set webhook at startup (Render will import/run this file)
 set_telegram_webhook()
