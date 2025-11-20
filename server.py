@@ -3,7 +3,8 @@ import os
 import logging
 import json
 from flask import Flask, request, jsonify
-from bot import create_application
+from bot import create_application, PENDING_PAYMENTS
+from product_service import ProductService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,6 +13,7 @@ app = Flask(__name__)
 
 # Create the Telegram application using your existing function
 application = create_application()
+product_service = ProductService()
 
 # Webhook route for Telegram
 @app.route("/webhook", methods=["POST"])
@@ -34,23 +36,46 @@ def mpesa_callback():
         data = request.get_json()
         logger.info(f"M-Pesa callback received: {data}")
         
-        # Process the callback - you'll need to implement this based on M-Pesa docs
-        # This is a basic structure - you'll need to adapt it to your actual callback format
-        
+        # Process the callback
         callback_data = data.get('Body', {}).get('stkCallback', {})
         result_code = callback_data.get('ResultCode')
         checkout_request_id = callback_data.get('CheckoutRequestID')
+        callback_metadata = callback_data.get('CallbackMetadata', {})
         
         if result_code == 0:
             # Payment successful
             logger.info(f"Payment successful for checkout: {checkout_request_id}")
-            # Here you would:
-            # 1. Find which user this payment belongs to
-            # 2. Send them the download link via Telegram
-            # 3. Update your database
+            
+            # Find the payment in pending payments
+            payment_info = PENDING_PAYMENTS.get(checkout_request_id)
+            if payment_info:
+                user_id = payment_info["user_id"]
+                product_id = payment_info["product_id"]
+                
+                # Get product and send download link
+                product = product_service.get_product(product_id)
+                if product:
+                    download_link = product['pixeldrain_link']
+                    message = f"""
+✅ Payment confirmed!
+
+📦 Product: {product['name']}
+🔗 Download Link: {download_link}
+
+Thank you for your purchase!
+"""
+                    # Send message to user (you'll need to implement this properly)
+                    # For now, we'll just log it
+                    logger.info(f"Should send to user {user_id}: {message}")
+                
+                # Remove from pending payments
+                del PENDING_PAYMENTS[checkout_request_id]
+            else:
+                logger.warning(f"Payment info not found for checkout: {checkout_request_id}")
         else:
             # Payment failed
-            logger.warning(f"Payment failed for checkout: {checkout_request_id}, code: {result_code}")
+            error_message = callback_data.get('ResultDesc', 'Unknown error')
+            logger.warning(f"Payment failed for checkout: {checkout_request_id}, error: {error_message}")
         
         return jsonify({"ResultCode": 0, "ResultDesc": "Success"})
         
@@ -69,10 +94,9 @@ def health():
 # Set webhook on startup
 def set_webhook():
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     
-    if not WEBHOOK_URL or not BOT_TOKEN:
-        logger.warning("WEBHOOK_URL or TELEGRAM_BOT_TOKEN not set")
+    if not WEBHOOK_URL:
+        logger.warning("WEBHOOK_URL not set")
         return
     
     url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
