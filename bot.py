@@ -14,10 +14,7 @@ from mpesa_handler import MpesaHandler
 from product_service import ProductService
 
 # Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Instances
@@ -42,7 +39,10 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ No products available.")
         return
 
-    keyboard = [[InlineKeyboardButton(f"{p['name']} - KSh {p['price']}", callback_data=f"product_{p['id']}")] for p in products]
+    keyboard = [
+        [InlineKeyboardButton(f"{p['name']} - KSh {p['price']}", callback_data=f"product_{p['id']}")]
+        for p in products
+    ]
     await update.message.reply_text("🛍 Available Products:\nChoose one:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,7 +87,9 @@ async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE
             checkout_id = response["CheckoutRequestID"]
             PENDING_PAYMENTS[checkout_id] = {"user_id": user_id, "product_id": product_id, "phone": phone}
             context.user_data["pending_payment"] = {"checkout_id": checkout_id, "product_id": product_id}
-            await update.message.reply_text("✅ Check your phone and enter your M-Pesa PIN. Download link will follow payment confirmation.")
+            await update.message.reply_text(
+                "✅ Check your phone and enter your M-Pesa PIN. Download link will follow payment confirmation."
+            )
         else:
             await update.message.reply_text("❌ Payment request failed. Try again later.")
     except Exception as e:
