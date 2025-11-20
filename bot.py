@@ -13,14 +13,10 @@ paystack = PaystackHandler()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CALLBACK_URL = os.getenv("PAYSTACK_CALLBACK_URL")
 
-# make sure this exists before server imports it!
-def set_webhook(url):
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    bot.set_webhook(url)
-    logger.info("Webhook set to %s", url)
-
-# Pending payments shared (server imports this)
+# Store payments until Paystack confirms
 PENDING_PAYMENTS = {}
+
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 def start(update: Update, context: CallbackContext):
     keyboard = []
@@ -39,17 +35,16 @@ def button(update: Update, context: CallbackContext):
         return
 
     reference = str(uuid.uuid4())
-    email = "customer@email.com"  # You may later ask for real email
+    email = "customer@email.com"  # later you can ask for real email
 
     payment_data = paystack.initialize_payment(email, product_id, reference, CALLBACK_URL)
     if payment_data:
-        # Track pending payment
         PENDING_PAYMENTS[reference] = {
             "user_id": query.from_user.id,
             "product_id": product_id
         }
         query.edit_message_text(
-            f"💳 Click link below to pay:\n\n{payment_data['authorization_url']}"
+            f"Click to pay:\n{payment_data['authorization_url']}"
         )
     else:
         query.edit_message_text("Payment failed to initialize. Try again later.")
