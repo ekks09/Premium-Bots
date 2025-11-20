@@ -3,20 +3,20 @@ services:
     name: telegram-bot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn server:app
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python server.py"
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: WEBHOOK_URL
-        sync: false
+        fromSecret: TELEGRAM_BOT_TOKEN
       - key: MPESA_CONSUMER_KEY
-        sync: false
+        fromSecret: MPESA_CONSUMER_KEY
       - key: MPESA_CONSUMER_SECRET
-        sync: false
+        fromSecret: MPESA_CONSUMER_SECRET
       - key: MPESA_PASSKEY
-        sync: false
+        fromSecret: MPESA_PASSKEY
       - key: MPESA_BUSINESS_SHORTCODE
-        sync: false
+        fromSecret: MPESA_BUSINESS_SHORTCODE
       - key: MPESA_CALLBACK_URL
-        sync: false
+        value: "https://<your-render-subdomain>.onrender.com/mpesa-callback"
+      - key: WEBHOOK_URL
+        value: "https://<your-render-subdomain>.onrender.com"
