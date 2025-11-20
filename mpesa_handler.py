@@ -1,95 +1,78 @@
 # mpesa_handler.py
-import base64
-import datetime
-import requests
-from requests.auth import HTTPBasicAuth
 import os
+import requests
+import hashlib
+import hmac
+import json
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 class MpesaHandler:
+    """
+    Backwards-compatible filename/class name.
+    This implements minimal Paystack helpers:
+      - initialize_transaction(email, amount_major, reference=None)
+      - verify_transaction(reference)
+      - verify_webhook_signature(raw_body, signature_header) -> bool
+    """
+
     def __init__(self):
-        # Load environment variables
-        self.consumer_key = os.getenv('MPESA_CONSUMER_KEY', '')
-        self.consumer_secret = os.getenv('MPESA_CONSUMER_SECRET', '')
-        self.passkey = os.getenv('MPESA_PASSKEY', '')
-        self.business_shortcode = os.getenv('MPESA_BUSINESS_SHORTCODE', '174379')
-        self.callback_url = os.getenv('MPESA_CALLBACK_URL')  # must be public
-        # sandbox endpoints (change to production when ready)
-        self.auth_url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-        self.stk_push_url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
-        self.query_url = "https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query"
+        self.secret = os.getenv("PAYSTACK_SECRET_KEY", "")
+        self.callback_url = os.getenv("PAYSTACK_CALLBACK_URL")  # public URL to receive webhooks
+        if not self.secret:
+            logger.warning("PAYSTACK_SECRET_KEY not set; Paystack API calls will fail.")
 
-        self.access_token = None
-        self.token_expiry = None
+        self.base = "https://api.paystack.co"
 
-    def get_mpesa_access_token(self):
-        if not self.consumer_key or not self.consumer_secret:
-            raise RuntimeError("MPESA_CONSUMER_KEY / MPESA_CONSUMER_SECRET not set")
-        resp = requests.get(self.auth_url, auth=HTTPBasicAuth(self.consumer_key, self.consumer_secret), timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        self.access_token = data.get("access_token")
-        self.token_expiry = datetime.datetime.now() + datetime.timedelta(seconds=3500)
-        logger.info("Obtained M-Pesa access token")
-        return self.access_token
-
-    def ensure_valid_token(self):
-        if not self.access_token or not self.token_expiry or datetime.datetime.now() >= self.token_expiry:
-            return self.get_mpesa_access_token()
-        return self.access_token
-
-    def generate_password(self):
-        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        raw = f"{self.business_shortcode}{self.passkey}{timestamp}"
-        encoded_password = base64.b64encode(raw.encode()).decode()
-        return encoded_password, timestamp
-
-    def make_stk_push(self, phone_number: str, amount: int, account_reference: str):
-        self.ensure_valid_token()
-        password, timestamp = self.generate_password()
-
-        payload = {
-            "BusinessShortCode": self.business_shortcode,
-            "Password": password,
-            "Timestamp": timestamp,
-            "TransactionType": "CustomerPayBillOnline",
-            "Amount": str(amount),
-            "PartyA": phone_number,
-            "PartyB": self.business_shortcode,
-            "PhoneNumber": phone_number,
-            "CallBackURL": self.callback_url,
-            "AccountReference": account_reference,
-            "TransactionDesc": "Telegram Bot Purchase"
-        }
-
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
+    def _headers(self):
+        return {
+            "Authorization": f"Bearer {self.secret}",
             "Content-Type": "application/json"
         }
 
-        resp = requests.post(self.stk_push_url, json=payload, headers=headers, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        logger.info("STK push response: %s", data)
-        return data
-
-    def query_transaction_status(self, checkout_request_id: str):
-        self.ensure_valid_token()
-        password, timestamp = self.generate_password()
+    def initialize_transaction(self, email: str, amount_major: float, reference: Optional[str] = None):
+        """
+        Initialize a Paystack transaction. amount_major is in main currency units (e.g., KSh).
+        Paystack expects amount in the smallest unit -> multiply by 100.
+        Returns Paystack response as dict.
+        """
+        if not email:
+            raise ValueError("Email is required by Paystack.")
+        amount_smallest = int(round(float(amount_major) * 100))
         payload = {
-            "BusinessShortCode": self.business_shortcode,
-            "Password": password,
-            "Timestamp": timestamp,
-            "CheckoutRequestID": checkout_request_id,
+            "email": email,
+            "amount": amount_smallest,
         }
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
-        resp = requests.post(self.query_url, json=payload, headers=headers, timeout=15)
+        if reference:
+            payload["reference"] = reference
+        if self.callback_url:
+            payload["callback_url"] = self.callback_url
+
+        url = f"{self.base}/transaction/initialize"
+        resp = requests.post(url, headers=self._headers(), json=payload, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
-        logger.info("Query response: %s", data)
-        return data
+        return resp.json()
+
+    def verify_transaction(self, reference: str):
+        """
+        Verify a transaction by reference using Paystack verify API.
+        """
+        if not reference:
+            raise ValueError("reference required for verify")
+        url = f"{self.base}/transaction/verify/{reference}"
+        resp = requests.get(url, headers=self._headers(), timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+
+    def verify_webhook_signature(self, raw_body: bytes, signature_header: str) -> bool:
+        """
+        Paystack sends header 'x-paystack-signature' which is HMAC-SHA512 of the raw body using SECRET_KEY.
+        """
+        if not self.secret:
+            logger.warning("No PAYSTACK_SECRET_KEY available to verify webhook signature.")
+            return False
+        computed = hmac.new(self.secret.encode(), raw_body, hashlib.sha512).hexdigest()
+        # signature_header can be hex string; Paystack uses hex lowercase
+        return hmac.compare_digest(computed, signature_header)
