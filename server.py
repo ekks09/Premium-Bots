@@ -10,15 +10,17 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Telegram bot application
-application = create_application()
+# Telegram bot application - using Updater for PTB v13.x
+updater = create_application()
 product_service = ProductService()
 
 # ----------------- Webhook for Telegram -----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        application.update_queue.put_nowait(request.get_json(force=True))
+        json_data = request.get_json(force=True)
+        update = updater.bot.get_updates([json_data])[0]
+        updater.dispatcher.process_update(update)
         return "OK", 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -49,7 +51,7 @@ def mpesa_callback():
                     "Thank you for your purchase!"
                 )
                 try:
-                    application.bot.send_message(chat_id=user_id, text=message)
+                    updater.bot.send_message(chat_id=user_id, text=message)
                     logger.info(f"Sent download link to {user_id}")
                 except Exception as e:
                     logger.error(f"Failed to send message to {user_id}: {e}")
@@ -73,8 +75,24 @@ def index():
 def health():
     return "OK", 200
 
+# ----------------- Set webhook on startup -----------------
+def set_webhook():
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+    if not WEBHOOK_URL:
+        logger.warning("WEBHOOK_URL not set")
+        return
+    
+    url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
+    try:
+        updater.bot.set_webhook(url)
+        logger.info(f"Webhook set successfully: {url}")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+
+# Set webhook when app starts
+set_webhook()
+
 # ----------------- Run Flask -----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
