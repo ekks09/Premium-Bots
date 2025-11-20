@@ -35,7 +35,6 @@ def webhook():
     try:
         update_json = request.get_json(force=True)
         logger.info("Received update: %s", update_json)
-        # delegate to bot handler (synchronous)
         handle_update(update_json)
         return "OK", 200
     except Exception as e:
@@ -69,27 +68,32 @@ def paystack_callback():
         user_id = payment_info["user_id"]
         product_id = payment_info["product_id"]
 
-        # Optionally verify with Paystack API for extra security
+        # Verify with Paystack API
         verification = paystack_handler.verify_payment(reference)
         if verification.get("status") != "success":
             logger.warning("Paystack verification failed or not successful for reference: %s", reference)
             return jsonify({"status": "failed_verification"}), 400
 
-        # Get product link from ProductService
+        # Get product link from ProductService if available, else fallback to PaystackHandler link
         product = product_service.get_product(product_id)
-        if product:
-            download_link = product.get("pixeldrain_link", "No link available")
-            message = (
-                "✅ Payment confirmed!\n\n"
-                f"📦 Product: {product['name']}\n"
-                f"🔗 Download Link: {download_link}\n\n"
-                "Thank you for your purchase!"
-            )
-            try:
-                send_message(chat_id=user_id, text=message)
-                logger.info("Download link sent to user %s", user_id)
-            except Exception as e:
-                logger.exception("Failed to send Telegram message: %s", e)
+        if product and "pixeldrain_link" in product:
+            download_link = product["pixeldrain_link"]
+        else:
+            # fallback: if product not in service, use PaystackHandler returned link
+            download_link = verification.get("download_link", "No link available")
+
+        message = (
+            "✅ Payment confirmed!\n\n"
+            f"📦 Product: {product['name'] if product else product_id}\n"
+            f"🔗 Download Link: {download_link}\n\n"
+            "Thank you for your purchase!"
+        )
+
+        try:
+            send_message(chat_id=user_id, text=message)
+            logger.info("Download link sent to user %s", user_id)
+        except Exception as e:
+            logger.exception("Failed to send Telegram message: %s", e)
 
         # remove pending payment
         del PENDING_PAYMENTS[reference]
