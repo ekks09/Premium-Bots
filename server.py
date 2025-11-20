@@ -1,7 +1,8 @@
 # server.py
 import os
 import logging
-from flask import Flask, request
+import json
+from flask import Flask, request, jsonify
 from bot import create_application
 
 logging.basicConfig(level=logging.INFO)
@@ -12,7 +13,7 @@ app = Flask(__name__)
 # Create the Telegram application using your existing function
 application = create_application()
 
-# Webhook route
+# Webhook route for Telegram
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """Handle incoming Telegram updates via webhook"""
@@ -24,6 +25,38 @@ def webhook():
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return "Error", 500
+
+# M-Pesa callback route
+@app.route("/mpesa-callback", methods=["POST"])
+def mpesa_callback():
+    """Handle M-Pesa payment confirmation"""
+    try:
+        data = request.get_json()
+        logger.info(f"M-Pesa callback received: {data}")
+        
+        # Process the callback - you'll need to implement this based on M-Pesa docs
+        # This is a basic structure - you'll need to adapt it to your actual callback format
+        
+        callback_data = data.get('Body', {}).get('stkCallback', {})
+        result_code = callback_data.get('ResultCode')
+        checkout_request_id = callback_data.get('CheckoutRequestID')
+        
+        if result_code == 0:
+            # Payment successful
+            logger.info(f"Payment successful for checkout: {checkout_request_id}")
+            # Here you would:
+            # 1. Find which user this payment belongs to
+            # 2. Send them the download link via Telegram
+            # 3. Update your database
+        else:
+            # Payment failed
+            logger.warning(f"Payment failed for checkout: {checkout_request_id}, code: {result_code}")
+        
+        return jsonify({"ResultCode": 0, "ResultDesc": "Success"})
+        
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
+        return jsonify({"ResultCode": 1, "ResultDesc": "Failed"}), 500
 
 @app.route("/", methods=["GET"])
 def index():
