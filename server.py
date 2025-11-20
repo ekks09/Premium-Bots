@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Create the Telegram application using your existing function
-application = create_application()
+updater = create_application()
+application = updater.dispatcher
 product_service = ProductService()
 
 # Webhook route for Telegram
@@ -21,8 +22,8 @@ def webhook():
     """Handle incoming Telegram updates via webhook"""
     try:
         json_update = request.get_json(force=True)
-        update = type('Update', (object,), json_update)  # Simple object creation
-        application.update_queue.put_nowait(update)
+        update = updater.bot.get_updates([json_update])[0]
+        updater.dispatcher.process_update(update)
         return "OK", 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -64,9 +65,12 @@ def mpesa_callback():
 
 Thank you for your purchase!
 """
-                    # Send message to user (you'll need to implement this properly)
-                    # For now, we'll just log it
-                    logger.info(f"Should send to user {user_id}: {message}")
+                    # Send message to user
+                    try:
+                        updater.bot.send_message(chat_id=user_id, text=message)
+                        logger.info(f"Download link sent to user {user_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to send message to user {user_id}: {e}")
                 
                 # Remove from pending payments
                 del PENDING_PAYMENTS[checkout_request_id]
@@ -102,7 +106,7 @@ def set_webhook():
     url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     try:
         # Use the bot instance from your application
-        result = application.bot.set_webhook(url)
+        result = updater.bot.set_webhook(url)
         logger.info(f"Webhook set successfully: {url}")
         return result
     except Exception as e:
