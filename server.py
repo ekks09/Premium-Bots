@@ -18,7 +18,7 @@ product_service = ProductService()
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        update = application.bot.update_queue.put_nowait(request.get_json(force=True))
+        application.update_queue.put_nowait(request.get_json(force=True))
         return "OK", 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -77,3 +77,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
