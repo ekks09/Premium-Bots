@@ -26,9 +26,6 @@ product_service = ProductService()
 # Temporary user states
 USER_STATES = {}
 
-# Telegram token from environment
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
 
 # -------------------------------
 # COMMAND: /start
@@ -185,8 +182,8 @@ Steps to buy:
 # -------------------------------
 # Application entry
 # -------------------------------
-def create_application():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+def create_application(token: str):
+    app = Application.builder().token(token).build()
 
     # Commands
     app.add_handler(CommandHandler("start", start))
