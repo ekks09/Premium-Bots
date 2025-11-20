@@ -1,22 +1,22 @@
 services:
   - type: web
-    name: telegram-bot
+    name: telegram-mpesa-bot
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn server:app"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        fromSecret: TELEGRAM_BOT_TOKEN
+        value: 8569971585:AAEBW_I71bEAzapt72vEWaNe_FU9h4lpxQ0
       - key: MPESA_CONSUMER_KEY
-        fromSecret: MPESA_CONSUMER_KEY
+        value: Cs3WvBlkb56vVUGwgLGTOqNde9SdXnk6XM7oHTPYD9WMEK6N
       - key: MPESA_CONSUMER_SECRET
-        fromSecret: MPESA_CONSUMER_SECRET
+        value: IBOOKUbOqXG1Xk7rm09JE9L0WxxCHFApQpYcxKR8zld9Ha2LLlGMyH9LIh53sa0i
       - key: MPESA_PASSKEY
-        fromSecret: MPESA_PASSKEY
+        value: bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919
       - key: MPESA_BUSINESS_SHORTCODE
-        fromSecret: MPESA_BUSINESS_SHORTCODE
+        value: "3131916"
       - key: MPESA_CALLBACK_URL
-        value: "https://<your-render-subdomain>.onrender.com/mpesa-callback"
+        value: https://premium-bots.onrender.com/mpesa-callback
       - key: WEBHOOK_URL
-        value: "https://<your-render-subdomain>.onrender.com"
+        value: https://premium-bots.onrender.com
