@@ -2,12 +2,12 @@ import logging
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Updater,
+    Application,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    Filters,
-    CallbackContext
+    ContextTypes,
+    filters
 )
 from mpesa_handler import MpesaHandler
 from product_service import ProductService
@@ -33,7 +33,7 @@ PENDING_PAYMENTS = {}
 # -------------------------------
 # COMMAND: /start
 # -------------------------------
-def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     message = f"""
@@ -47,17 +47,17 @@ I handle:
 Use /products to get started.
 """
 
-    update.message.reply_text(message)
+    await update.message.reply_text(message)
 
 
 # -------------------------------
 # COMMAND: /products
 # -------------------------------
-def show_products(update: Update, context: CallbackContext):
+async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     products = product_service.get_products()
 
     if not products:
-        update.message.reply_text("❌ No products available.")
+        await update.message.reply_text("❌ No products available.")
         return
 
     keyboard = [
@@ -70,7 +70,7 @@ def show_products(update: Update, context: CallbackContext):
         for p in products
     ]
 
-    update.message.reply_text(
+    await update.message.reply_text(
         "🛍 Available Products:\nChoose one:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -79,15 +79,15 @@ def show_products(update: Update, context: CallbackContext):
 # -------------------------------
 # CALLBACK: product chosen
 # -------------------------------
-def handle_product_selection(update: Update, context: CallbackContext):
+async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    query.answer()
+    await query.answer()
 
     product_id = query.data.split("_")[1]
     product = product_service.get_product(product_id)
 
     if not product:
-        query.edit_message_text("❌ Product not found.")
+        await query.edit_message_text("❌ Product not found.")
         return
 
     USER_STATES[query.from_user.id] = "awaiting_phone"
@@ -102,13 +102,13 @@ Enter your M-Pesa number in the format:
 2547XXXXXXXX
 """
 
-    query.edit_message_text(text)
+    await query.edit_message_text(text)
 
 
 # -------------------------------
 # MESSAGE: phone number handler
 # -------------------------------
-def handle_phone_number(update: Update, context: CallbackContext):
+async def handle_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if USER_STATES.get(user_id) != "awaiting_phone":
@@ -118,17 +118,17 @@ def handle_phone_number(update: Update, context: CallbackContext):
 
     # Basic validation
     if not phone.isdigit() or not phone.startswith("254") or len(phone) != 12:
-        update.message.reply_text("❌ Invalid number. Use format: 2547XXXXXXXX")
+        await update.message.reply_text("❌ Invalid number. Use format: 2547XXXXXXXX")
         return
 
     product_id = context.user_data.get("selected_product_id")
     product = product_service.get_product(product_id)
 
     if not product:
-        update.message.reply_text("❌ Product missing. Start again at /products.")
+        await update.message.reply_text("❌ Product missing. Start again at /products.")
         return
 
-    update.message.reply_text("📲 Sending M-Pesa STK push...")
+    await update.message.reply_text("📲 Sending M-Pesa STK push...")
 
     try:
         response = mpesa_handler.make_stk_push(
@@ -153,18 +153,18 @@ def handle_phone_number(update: Update, context: CallbackContext):
                 "product_id": product_id,
             }
 
-            update.message.reply_text(
+            await update.message.reply_text(
                 "✅ Check your phone and enter your M-Pesa PIN to complete payment.\n"
                 "I'll send your download link automatically once payment is confirmed."
             )
         else:
-            update.message.reply_text(
+            await update.message.reply_text(
                 "❌ Payment request failed. Try again later."
             )
 
     except Exception as e:
         logger.error(f"STK Error: {e}")
-        update.message.reply_text("❌ Payment system unavailable.")
+        await update.message.reply_text("❌ Payment system unavailable.")
 
     finally:
         USER_STATES[user_id] = None  # Reset state
@@ -173,7 +173,7 @@ def handle_phone_number(update: Update, context: CallbackContext):
 # -------------------------------
 # COMMAND: /help
 # -------------------------------
-def help_command(update: Update, context: CallbackContext):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
 🆘 Help Menu
 
@@ -188,7 +188,7 @@ Steps to buy:
 3. Approve STK push
 4. Receive download link
 """
-    update.message.reply_text(text)
+    await update.message.reply_text(text)
 
 
 # -------------------------------
@@ -200,19 +200,17 @@ def create_application():
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
     
-    # Use Updater for v13.x compatibility
-    updater = Updater(TELEGRAM_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Commands
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("products", show_products))
-    dispatcher.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("products", show_products))
+    app.add_handler(CommandHandler("help", help_command))
 
     # Callback
-    dispatcher.add_handler(CallbackQueryHandler(handle_product_selection))
+    app.add_handler(CallbackQueryHandler(handle_product_selection))
 
     # Phone numbers and messages
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_phone_number))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone_number))
 
-    return updater
+    return app
