@@ -13,44 +13,52 @@ app = Flask(__name__)
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 paystack = PaystackHandler()
 
-@app.route("/")
-def home():
-    return "Bot alive", 200
+@app.route("/", methods=["GET"])
+def index():
+    return "OK", 200
 
-@app.route("/paystack-callback", methods=["GET", "POST"])
+@app.route("/paystack-callback", methods=["POST"])
 def paystack_callback():
     try:
-        data = request.args if request.method == "GET" else request.json
-        reference = data.get("reference")
+        payload = request.get_json(force=True)
+        logger.info("Paystack webhook payload: %s", payload)
 
+        # Optional: verify x-paystack-signature header here in production
+        event = payload.get("event")
+        if event != "charge.success":
+            logger.info("Ignoring event: %s", event)
+            return jsonify({"status": "ignored"}), 200
+
+        reference = payload.get("data", {}).get("reference")
         if not reference:
-            return jsonify({"status": False, "message": "Missing reference"}), 400
+            logger.warning("No reference in webhook payload")
+            return jsonify({"status": "bad_request"}), 400
 
-        result = paystack.verify_payment(reference)
+        # Optional: server-side verify for extra safety
+        verify = paystack.verify_payment(reference)
+        if not verify.get("ok"):
+            logger.error("Webhook verify failed for %s: %s", reference, verify)
+            return jsonify({"status": "verify_failed", "detail": verify}), 400
 
-        if result.get("status") == "success":
-            payment_data = PENDING_PAYMENTS.pop(reference, None)
-            if not payment_data:
-                logger.warning("Payment received but reference not found: %s", reference)
-                return jsonify({"status": True, "message": "Payment verified but no session found"})
+        pending = PENDING_PAYMENTS.get(reference)
+        if not pending:
+            logger.warning("No pending payment for reference %s", reference)
+            # still return 200 to Paystack to avoid retries, but log it
+            return jsonify({"status": "ok", "message": "no_session_found"}), 200
 
-            user_id = payment_data["user_id"]
-            product_name = result["product_name"]
-            link = result["download_link"]
-
-            bot.send_message(
-                chat_id=user_id,
-                text=f"🎉 Payment confirmed for *{product_name}*!\n\nDownload here:\n{link}",
-                parse_mode="Markdown"
-            )
-            return jsonify({"status": True, "message": "Delivered"})
-
-        return jsonify({"status": False, "message": "Payment not successful"})
+        user_id = pending["user_id"]
+        product = verify["data"]["product"]
+        link = product.get("pixeldrain_link", "No link")
+        bot.send_message(chat_id=user_id,
+                         text=f"✅ Payment confirmed for *{product['name']}*.\n\nDownload: {link}",
+                         parse_mode="Markdown")
+        # remove pending
+        del PENDING_PAYMENTS[reference]
+        return jsonify({"status": "delivered"}), 200
 
     except Exception as e:
-        logger.exception("Error in callback: %s", e)
-        return jsonify({"status": False, "error": str(e)}), 500
+        logger.exception("Exception processing Paystack webhook: %s", e)
+        return jsonify({"status": "error", "detail": str(e)}), 500
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
