@@ -5,21 +5,33 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ===== PRODUCTS HERE =======
+# ========= YOUR PRODUCTS ==========
+# Make these prices match ProductService prices
 PRODUCTS = {
-    "product_1": {
-        "name": "Premium Bundle",
-        "price": 100,   # Example price
+    "1": {
+        "name": "Spotify Premium",
+        "price": 1,
         "pixeldrain_link": "https://pixeldrain.com/u/aakwH36V"
     },
+    "2": {
+        "name": "Basic Software Package",
+        "price": 250,
+        "pixeldrain_link": "https://pixeldrain.com/u/your-file-id-2"
+    },
+    "3": {
+        "name": "Advanced Tools Bundle",
+        "price": 750,
+        "pixeldrain_link": "https://pixeldrain.com/u/your-file-id-3"
+    }
 }
-# ===========================
+# ===================================
 
 class PaystackHandler:
     def __init__(self):
         self.secret_key = os.getenv("PAYSTACK_SECRET_KEY")
         if not self.secret_key:
             raise RuntimeError("PAYSTACK_SECRET_KEY environment variable not set")
+
         self.base_url = "https://api.paystack.co"
         self.headers = {
             "Authorization": f"Bearer {self.secret_key}",
@@ -41,9 +53,15 @@ class PaystackHandler:
         }
 
         try:
-            resp = requests.post(f"{self.base_url}/transaction/initialize", json=payload, headers=self.headers, timeout=15)
+            resp = requests.post(
+                f"{self.base_url}/transaction/initialize",
+                json=payload,
+                headers=self.headers,
+                timeout=15
+            )
             resp.raise_for_status()
             data = resp.json()
+
             if data.get("status"):
                 return data["data"]
             return {}
@@ -53,7 +71,11 @@ class PaystackHandler:
 
     def verify_payment(self, reference: str):
         try:
-            resp = requests.get(f"{self.base_url}/transaction/verify/{reference}", headers=self.headers, timeout=15)
+            resp = requests.get(
+                f"{self.base_url}/transaction/verify/{reference}",
+                headers=self.headers,
+                timeout=15
+            )
             resp.raise_for_status()
             data = resp.json()
 
@@ -68,6 +90,7 @@ class PaystackHandler:
                 "product_name": product["name"],
                 "download_link": product["pixeldrain_link"]
             }
+
         except Exception as e:
             logger.exception("Paystack verify error: %s", e)
             return {"status": "error", "message": str(e)}
